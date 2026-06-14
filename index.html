@@ -415,6 +415,14 @@ body{
 .kn-card-plan{display:flex;align-items:center;gap:8px;margin-top:6px;padding-top:6px;border-top:1px solid #F0F0F0;flex-wrap:wrap}
 .kn-plan-name{font-size:11px;color:var(--muted);background:#F3F4F6;border-radius:4px;padding:2px 8px}
 .kn-plan-amount{font-size:13px;font-weight:800;color:var(--p);letter-spacing:-.3px}
+.kn-card-footer{display:flex;align-items:center;justify-content:space-between;margin-top:8px;padding-top:8px;border-top:1px solid #F0F0F0}
+.kn-like-btn{display:inline-flex;align-items:center;gap:4px;background:none;border:1.5px solid #E5E7EB;border-radius:20px;padding:3px 10px;font-size:12px;color:var(--muted);cursor:pointer;transition:.15s}
+.kn-like-btn:hover{border-color:var(--p);color:var(--p)}
+.kn-like-btn.liked{border-color:var(--p);background:var(--pale);color:var(--p);font-weight:700}
+.kn-like-count{font-weight:700;font-size:12px}
+.kn-sort-bar{display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap}
+.kn-sort-btn{background:none;border:1.5px solid #E5E7EB;border-radius:20px;padding:3px 12px;font-size:11px;color:var(--muted);cursor:pointer;transition:.15s}
+.kn-sort-btn.active{border-color:var(--p);background:var(--pale);color:var(--p);font-weight:700}
 </style>
 <body>
 <div class="app">
@@ -1240,14 +1248,18 @@ function gs(id){
     box.innerHTML+='<div class="mc-used-section"><div class="mc-used-title">🔧 この店舗が使用する機械</div><div class="mc-used-list">'+cardsHtml+'</div></div>';
   }
   // Append knowledge section
-  const knHtml = renderKnCards(id);
   const knCount = getKnowledge().filter(k=>k.salonId===id).length;
   box.innerHTML += `<div class="kn-section">
     <div class="kn-section-head">
       <span class="kn-section-title">💡 ナレッジ${knCount?` (${knCount}件)`:''}</span>
       <button class="kn-add-inline" onclick="openKnModal('${id}')">＋ 追加</button>
     </div>
-    ${knHtml}
+    <div class="kn-sort-bar">
+      <span style="font-size:11px;color:var(--muted)">並び替え：</span>
+      <button class="kn-sort-btn active" onclick="setKnSort('likes','${id}',this)">👍 参考になった順</button>
+      <button class="kn-sort-btn" onclick="setKnSort('amount','${id}',this)">💰 契約金額順</button>
+    </div>
+    <div id="kn-cards-${id}">${renderKnCards(id,'likes')}</div>
   </div>`;
   box.scrollIntoView({behavior:'smooth',block:'nearest'});
 }
@@ -1388,11 +1400,21 @@ async function deleteKn(id) {
 }
 
 // --- カード描画 ---
-function renderKnCards(salonId) {
-  const arr = getKnowledge().filter(k => k.salonId === salonId);
-  if (!arr.length) return '<div class="kn-empty-state">まだナレッジがありません。<br>申し込みに繋がったフレーズを記録しましょう！</div>';
-  return arr.map(k => `
-    <div class="kn-card">
+function sortKn(arr, sortBy) {
+  return [...arr].sort((a, b) => {
+    if (sortBy === 'amount') {
+      return (Number(b.amount)||0) - (Number(a.amount)||0);
+    }
+    // likes: いいね数降順、同数なら金額降順
+    const ld = (Number(b.likes)||0) - (Number(a.likes)||0);
+    return ld !== 0 ? ld : (Number(b.amount)||0) - (Number(a.amount)||0);
+  });
+}
+
+function knCardHtml(k) {
+  const likes = Number(k.likes) || 0;
+  return `
+    <div class="kn-card" id="kn-card-${k.id}">
       <button class="kn-delete" onclick="deleteKn(${k.id})" title="削除">✕</button>
       <div class="kn-card-phrase">${k.phrase}</div>
       <div class="kn-card-meta">
@@ -1403,7 +1425,39 @@ function renderKnCards(salonId) {
       </div>
       ${(k.plan||k.amount) ? `<div class="kn-card-plan">${k.plan?`<span class="kn-plan-name">${k.plan}</span>`:''} ${k.amount?`<span class="kn-plan-amount">¥${k.amount}</span>`:''}</div>` : ''}
       ${k.notes ? `<div class="kn-card-notes">${k.notes}</div>` : ''}
-    </div>`).join('');
+      <div class="kn-card-footer">
+        <button class="kn-like-btn${likes>0?' liked':''}" onclick="likeKn(${k.id},this)">
+          👍 参考になった <span class="kn-like-count">${likes>0?likes:''}</span>
+        </button>
+      </div>
+    </div>`;
+}
+
+function renderKnCards(salonId, sortBy='likes') {
+  const arr = sortKn(getKnowledge().filter(k => k.salonId === salonId), sortBy);
+  if (!arr.length) return '<div class="kn-empty-state">まだナレッジがありません。<br>申し込みに繋がったフレーズを記録しましょう！</div>';
+  return arr.map(knCardHtml).join('');
+}
+
+function setKnSort(sortBy, salonId, btn) {
+  document.querySelectorAll('.kn-sort-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  const box = document.getElementById('kn-cards-' + salonId);
+  if (box) box.innerHTML = renderKnCards(salonId, sortBy);
+}
+
+async function likeKn(id, btn) {
+  btn.disabled = true;
+  // 楽観的更新
+  const k = (KN_CACHE||[]).find(k=>k.id===id);
+  if (k) { k.likes = (Number(k.likes)||0) + 1; }
+  const countEl = btn.querySelector('.kn-like-count');
+  const newCount = k ? Number(k.likes) : 1;
+  countEl.textContent = newCount;
+  btn.classList.add('liked');
+  // GASに送信
+  gasGet({action:'like', id});
+  setTimeout(() => { btn.disabled = false; }, 2000);
 }
 
 // --- 一覧描画 ---
@@ -1420,19 +1474,7 @@ function renderKnMgmt() {
   box.innerHTML = Object.entries(grouped).map(([sId, items]) => `
     <div class="kn-salon-group">
       <div class="kn-salon-group-name">${SALON_NAMES[sId]||sId}<span class="kn-count-badge">${items.length}</span></div>
-      ${items.map(k=>`
-        <div class="kn-card">
-          <button class="kn-delete" onclick="deleteKn(${k.id})" title="削除">✕</button>
-          <div class="kn-card-phrase">${k.phrase}</div>
-          <div class="kn-card-meta">
-            ${k.concern?`<span class="kn-tag-concern">${k.concern}</span>`:''}
-            <span class="kn-tag-result ${k.result}">${k.result==='success'?'✅ 申し込み':'🔄 参考'}</span>
-            ${k.staff?`<span class="kn-card-staff">👤 ${k.staff}</span>`:''}
-            <span class="kn-card-date">${k.date}</span>
-          </div>
-          ${(k.plan||k.amount)?`<div class="kn-card-plan">${k.plan?`<span class="kn-plan-name">${k.plan}</span>`:''} ${k.amount?`<span class="kn-plan-amount">¥${k.amount}</span>`:''}</div>`:''}
-          ${k.notes?`<div class="kn-card-notes">${k.notes}</div>`:''}
-        </div>`).join('')}
+      ${sortKn(items,'likes').map(knCardHtml).join('')}
     </div>`).join('');
 }
 
